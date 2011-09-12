@@ -19,7 +19,7 @@ class PollControlModelImpl extends Object implements PollControlModel {
     /**
      * Connection to the database.
      *
-     * @var DibiConnection Connection to the database.
+     * @var NotORM Connection to the database.
      */
     private $connection;
 
@@ -34,38 +34,42 @@ class PollControlModelImpl extends Object implements PollControlModel {
      * Constructor of the poll control model layer.
      *
      * @param mixed $id Id of the current poll.
+     * @param NotORM $database
      */
-    public function __construct($id) {
+    public function __construct($id, \NotORM $database) {
         $this->id = $id;
-        $this->connection = new DibiConnection(Environment::getConfig('database'));
+        $this->connection = $database;
 
-		$sess = Environment::getSession(self::SESSION_NAMESPACE);
-		$sess->poll[$id] = FALSE;
+        $sess = Environment::getSession(self::SESSION_NAMESPACE);
+        $sess->poll[$id] = FALSE;
     }
 
     /**
      * @see PollControlModel::getAllVotesCount()
      */
     public function getAllVotesCount() {
-        return $this->connection->fetchSingle('SELECT SUM(votes) FROM poll_control_answers WHERE questionId = %i', $this->id);
+        $some = $this->connection->poll_control_answers('questionId', $this->id)->select('SUM(votes) AS votes')->fetch();
+       // \Nette\Diagnostics\Debugger::barDump($some);
+        return $some['votes'];
     }
 
     /**
      * @see PollControlModel::getQuestion()
      */
     public function getQuestion() {
-        return $this->connection->fetchSingle('SELECT question FROM poll_control_questions WHERE id = %i', $this->id);
+        $question = $this->connection->poll_control_questions('id', $this->id)->select('question')->fetch();
+        return $question["question"];
     }
 
     /**
      * @see PollControlModel::getAnswers()
      */
     public function getAnswers() {
-        $this->connection->fetchAll('SELECT id, answer, votes FROM poll_control_answers WHERE questionId = %i', $this->id);
+        //$this->connection->fetchAll('SELECT id, answer, votes FROM poll_control_answers WHERE questionId = %i', $this->id);
 
         $answers = array();
-        foreach ($this->connection->fetchAll('SELECT id, answer, votes FROM poll_control_answers WHERE questionId = %i', $this->id) as $row) {
-            $answers[] = new PollControlAnswer($row->answer, $row->id, $row->votes);
+        foreach ($this->connection->poll_control_answers('questionId', $this->id)->select('id, answer, votes') as $row) {
+            $answers[] = new PollControlAnswer($row['answer'], $row['id'], $row['votes']);
         }
 
         return $answers;
@@ -78,7 +82,12 @@ class PollControlModelImpl extends Object implements PollControlModel {
      */
     public function vote($id) {
         if ($this->isVotable()) {
-            $this->connection->query('UPDATE poll_control_answers SET votes = votes + 1 WHERE id = %i', $id, ' AND questionId = %i', $this->id);
+            $this->connection->poll_control_answers(
+                    array(
+                        'id' => $id,
+                        'questionId' => $this->id
+                    ))
+                    ->update(array('votes' => new NotORM_Literal('votes + 1')));
             
             $this->denyVotingForUser();
         } else {
@@ -95,7 +104,12 @@ class PollControlModelImpl extends Object implements PollControlModel {
         if ($sess->poll[$this->id] === TRUE) {
             return FALSE;
         } else {
-            if ($this->connection->fetchSingle("SELECT COUNT(*) FROM poll_control_votes WHERE ip = '$_SERVER[REMOTE_ADDR]' AND questionId = $this->id AND date + INTERVAL 30 SECOND > NOW()")) {
+            if ($this->connection->poll_control_votes(array(
+                        'ip' => $_SERVER['REMOTE_ADDR'],
+                        'questionId' => $this->id
+                    ))
+                    ->where(new NotORM_Literal("date + INTERVAL 30 SECOND > NOW()"))
+                    ->count('*')) {
                 return FALSE;
             }
         }
@@ -111,7 +125,11 @@ class PollControlModelImpl extends Object implements PollControlModel {
 
         $sess->poll[$this->id] = TRUE;
 
-        $this->connection->query("INSERT INTO poll_control_votes (questionId, ip, date) VALUES ($this->id, '$_SERVER[REMOTE_ADDR]', NOW())");
+        $this->connection->poll_control_votes()->insert(array(
+            "questionId" => $this->id,
+            'ip' => $_SERVER['REMOTE_ADDR'],
+            'date' => new NotORM_Literal('NOW()')
+        ));
     }
 
 }
